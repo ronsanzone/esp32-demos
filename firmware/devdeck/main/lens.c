@@ -26,6 +26,7 @@ static int16_t hann[NFFT];
 static int32_t tw_c[NFFT / 2], tw_s[NFFT / 2];
 static uint16_t col_lo[WF_W], col_hi[WF_W];
 static uint16_t cmap[256];
+static int16_t col_floor[WF_W];          // per-column background level, log2 Q8
 
 static uint16_t rows[ROWQ][WF_W];        // producer: audio task; consumer: LVGL timer
 static volatile uint32_t row_w, row_r;
@@ -137,7 +138,7 @@ static void audio_task(void *arg)
     int16_t *stereo = w0->stereo, *ring = w0->ring;
     int32_t *re = w0->re, *im = w0->im;
     int *mag = w0->mag;
-    int peak_ema = 0, hop = 0;
+    int hop = 0;
     for (;;) {
         if (!audio_mic_read(stereo, NFFT)) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
         int64_t sq = 0;
@@ -157,24 +158,24 @@ static void audio_task(void *arg)
         level_db = rms > 0.5f ? 20 * log10f(rms / 32768.0f) : -90;
 
         fft(re, im);
-        int row_peak = 0;
         for (int k = 1; k < NFFT / 2; k++) {
             uint32_t a = (uint32_t)abs(re[k]), b = (uint32_t)abs(im[k]);
             uint32_t m = a > b ? a + (b * 3 >> 3) : b + (a * 3 >> 3);
             mag[k] = log2q8(m + 1);
-            if (mag[k] > row_peak) row_peak = mag[k];
         }
-        // Auto-range: show the top ~54 dB under a slowly tracked peak, but keep a floor so silence stays dark.
-        peak_ema = peak_ema ? (peak_ema * 31 + row_peak) / 32 : row_peak;
-        int top = peak_ema > 17 * 256 ? peak_ema : 17 * 256;   // raised 6 dB after the first hardware run showed a glowing quiet room
-        int bottom = top - 9 * 256;
+        // Each column shows energy above its own steady background (fans, hum, mic noise), so a quiet room
+        // stays dark and new sounds pop. The background falls instantly and creeps up ~1.5 dB/s, so a held
+        // note fades after ~20 s; the tuner is unaffected.
         uint32_t w = row_w;
         if (w - row_r < ROWQ) {
             uint16_t *row = rows[w % ROWQ];
             for (int c = 0; c < WF_W; c++) {
                 int m = 0;
                 for (int k = col_lo[c]; k < col_hi[c]; k++) if (mag[k] > m) m = mag[k];
-                int idx = (m - bottom) * 255 / (top - bottom);
+                int f = col_floor[c];
+                f = !f || m < f ? m : f + 2;
+                col_floor[c] = f;
+                int idx = (m - f - 256) * 255 / (6 * 256);   // 6 dB of flutter hidden, then 36 dB of range
                 row[c] = cmap[idx < 0 ? 0 : idx > 255 ? 255 : idx];
             }
             row_w = w + 1;
