@@ -5,3 +5,4 @@ dependencies:
   waveshare/esp_lcd_touch_cst9217: ^1.0.4
   espressif/esp_lvgl_adapter: ^0.3.0
   espressif/cjson: '*'
+  espressif/esp_codec_dev: "^1.4"

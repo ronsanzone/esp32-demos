@@ -18,6 +18,41 @@ _Written 2026-10-11 at the end of the first working session. Records the state a
 - **No Wi-Fi.** It was built, verified, then removed because it cost 167 KB of the 228 KB free heap (see [Decisions](#decisions)).
 - **Not yet verified by a human:** panel colors and orientation on the glass, and touch (swipe, tap-to-cycle). Everything else was verified from on-device framebuffer snapshots (see [Verification](#verification-status)).
 
+## Launcher and apps (added 2026-10-11)
+
+One firmware holds six apps. The board runs **one app per boot**: picking another writes its id to NVS and reboots, so every app starts on a clean heap. That matters because the radio stacks and LVGL can't share 512 KB with each other and with devdeck's screens.
+
+```
+ home (launcher grid) ──tap card──► NVS deck/app = "lens", healthy = 1 ──► esp_restart
+        ▲                                                                       │
+        │  BOOT button (GPIO9), `deck.py app home`, or any reset             ▼
+        └─ (crash, hang + power cycle) before the app has run 5 s        apps_boot() reads deck/app,
+                                                                         sizes LVGL strips, runs app
+```
+
+| id | App | LVGL strip | What it uses | Notes |
+|---|---|---|---|---|
+| `home` | Launcher | 100 lines | touch | 2×3 grid of generative cards, free-heap readout |
+| `devdeck` | The original four screens | 100 | USB bridge | unchanged behavior |
+| `painting` | Living Painting | 100 | flash `storage` partition | Gray-Scott reaction-diffusion, 96×96 Q14 fixed point, upscaled to 480×480. Tap seeds a bloom, long-press cycles palettes (reef, ember, moss, ink). `commit` messages seed big blooms, Edit/Write tool calls small ones. Saves every 5 min into 32 rotating 40 KB slots (CRC-checked), so it keeps growing across reboots |
+| `lens` | Sound Lens | 100 | ES7210 mics over I2S (TDM, 16 kHz) | 512-point fixed-point FFT, log-frequency waterfall 40 Hz–8 kHz showing energy above each column's steady background (so fans and hum stay dark; a held note fades after ~20 s), McLeod-style pitch detection for the tuner, level meter |
+| `field` | Signal Field | 40 | Wi-Fi promiscuous (ch 1–13 hop), NimBLE passive scan, 802.15.4 promiscuous (ch 11–26 hop) | Orbs: distance = RSSI, angle = address hash, size = chattiness, color = protocol. Tap an orb for details. Each radio is optional; whatever starts is drawn |
+| `ghost` | Ghost Sense | 40 | Wi-Fi CSI from your router | Ridgelines of the subcarrier amplitude profile. Motion = short-window wobble vs. a learned quiet floor. Breathing estimate (autocorrelation, 6–30/min) only after 30 s of stillness, marked experimental. **With credentials** (`deck.py wifi`) it joins your network and pings the router every 20 ms; the replies carry the CSI. Without them it only listens, which on a quiet network (11b beacons) yields almost nothing, and the screen says so |
+
+**Privacy:** Signal Field only listens. Ghost Sense only listens unless you save Wi-Fi credentials, in which case it is the one app that joins your network (and only to ping the router). Addresses and network names stay in RAM and are never logged or sent to the laptop; the Wi-Fi driver's own connect log is turned down to warnings for the same reason.
+
+**Wi-Fi credentials for Ghost Sense:** stop the bridge, then run `tools/deck.py wifi`. It prompts for the network name and password and sends them over USB, and the board stores them in NVS namespace `wifi`. They are never in source, never logged, and the link scrubs the password from its buffers after saving. `tools/deck.py wifi --forget` erases them. The other apps never read them. Ghost Sense forgets fallback candidates as soon as it has picked one.
+
+**Radio memory:** `sdkconfig.defaults` turns on BT (NimBLE, observer role only), CSI and coexistence, and shrinks the Wi-Fi buffers (6 static RX, 16 dynamic RX, 8 dynamic TX, AMPDU off, IRAM optimizations off). Static DIRAM is about 261 KB used, 191 KB left before the heap. The radio apps use 40-line strips (about 77 KB instead of 192 KB) to leave room for the stacks. **Heap with all three radios running is unmeasured**; the start-up log line `radios: wifi 1 ble 1 15.4 1, free heap N` is the number to check.
+
+**How to switch apps:**
+- Tap a card on the home screen.
+- Press **BOOT** from any app to go home.
+- `tools/deck.py app <id>` from the laptop. If the bridge is running it queues the switch through the bridge (it owns the port); otherwise it sends directly.
+- Raw: `tools/deck.py send '{"t":"app","id":"field"}'`.
+
+The board prints `@@APP <id>` once per boot, and the bridge logs `board app: <id>` when it sees it.
+
 ## Quickstart
 
 ```bash
@@ -28,7 +63,7 @@ The alias defined in `~/.zshrc` puts Homebrew python3.14 ahead of macOS python 3
 ```bash
 cd firmware/devdeck && idf.py build && idf.py -p /dev/cu.usbmodem101 flash
 ```
-A first build on a clean checkout fetches the managed components (takes a few minutes).
+A first build on a clean checkout fetches the managed components (takes a few minutes). If this checkout was built before the launcher, `rm sdkconfig` (or `idf.py fullclean`) first so the radio settings in `sdkconfig.defaults` apply.
 
 ```bash
 cd tools && /opt/homebrew/bin/python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -90,10 +125,18 @@ firmware/devdeck/
   sdkconfig.defaults      16 MB flash, LVGL 64 KB pool, Montserrat 12–48
   partitions.csv          nvs 24K, phy, factory 6M, spiffs 3M (unused)
   main/
-    main.cpp              boot: PMU → panel → touch → LVGL → UI → USB link; app_lock/app_unlock C shims
-    app.h                 shared C interface (link, ui, LVGL lock)
-    link.c                USB JSON-lines reader, message dispatch, framebuffer snapshot
-    ui.c                  tileview, page dots, autoplay, shared widget helpers, topic dispatch
+    main.cpp              boot: pick app → PMU → panel → touch → LVGL (per-app strip) → app → USB link; BOOT button
+    app.h                 shared C interface (link, LVGL lock, app registry)
+    apps.c                app registry, NVS app id, crash fallback, apps_switch()
+    home.c                launcher grid
+    link.c                USB JSON-lines reader, dispatch to the running app, framebuffer snapshot
+    devdeck.c             (was ui.c) tileview, page dots, autoplay, shared widget helpers, topic dispatch
+    painting.c            Living Painting
+    audio.c/.h            ES7210 mic bring-up (I2S TDM + esp_codec_dev)
+    lens.c                Sound Lens
+    radio.c/.h            listen-only Wi-Fi helpers
+    field.c               Signal Field
+    ghost.c               Ghost Sense
     screens.h             palette + per-screen create/on functions
     scr_orbit.c           Agent Orbit
     scr_context.c         Context
@@ -106,7 +149,7 @@ firmware/devdeck/
     app_bsp/              esp_lvgl_adapter setup + 2-pixel-aligned rounder (CO5300 needs even areas)
     pmicpower/            AXP2101 setup (wraps vendored XPowersLib, MIT)
 tools/
-  deck.py                 bridge / send / snap / shot
+  deck.py                 bridge / send / snap / shot / app
   serlog.py               serial reader that survives USB re-enumeration
 docs/screenshots/         on-device framebuffer captures (2026-10-11)
 ```
@@ -147,10 +190,13 @@ deck.py shot ──SIGUSR1──► bridge ── {"t":"snap"} ──►   FLUSH
 | `pipe` | `c[8]`, `last`, `skill`, `ago`, `total` | Deep Work stage counts |
 | `pulse` | `total`, `streak`, `lv` (levels, week-major), `d14[]`, `prs:[{r,ti,st}]` | Ship Pulse |
 | `tile` | `i` | Jump to screen `i` (debug/screenshot use) |
+| `app` | `id` | Acked, then the board reboots into that app |
+| `wifi` | `s` (SSID), `p` (password) | Saves Ghost Sense's credentials in NVS (`s:""` erases). Acked, or `@@NAK wifi` if too long. Sent only by `deck.py wifi`, never through the bridge |
+| `commit` | `h` (short hash), `r` (repo) | Living Painting seeds a bloom; the bridge sends it when HEAD moves in a live session's repo (polled every 20 s) |
 | `snap` | | Stream a framebuffer snapshot |
 | `ping` | | Acked only |
 
-**Device → host:** `@@ACK <t>` per message. A snapshot is `@@SNAP x1 y1 x2 y2 nbytes\n` followed by raw RGB565 for each strip, then `@@SNAPEND`. Normal `ESP_LOG` output is interleaved, and the bridge drains and ignores it.
+**Device → host:** `@@APP <id>` once per boot. `@@ACK <t>` per message. A snapshot is `@@SNAP x1 y1 x2 y2 nbytes\n` followed by raw RGB565 for each strip, then `@@SNAPEND`. Normal `ESP_LOG` output is interleaved, and the bridge drains and ignores it.
 
 ### Firmware notes
 
@@ -209,6 +255,11 @@ If Wi-Fi comes back, shrink its buffers first (`CONFIG_ESP_WIFI_*_BUFFER_NUM`, s
 10. LVGL `LONG_MODE_DOTS` only truncates when the label's height is fixed.
 
 ## Known issues / limitations
+
+- **First hardware run (2026-10-11), screenshots in `docs/screenshots/launcher/`.** All six apps boot without panics and switching works. Free heap after start: home/devdeck 117 KB, painting 39 KB, lens 27 KB (tight), field 100 KB with all three radios up (63 frames/s, 33 devices), ghost 116 KB.
+- **Sound Lens** first failed with "out of memory": its 67 KB waterfall didn't fit LVGL's 64 KB pool, so the pixels now come from the system heap. The quiet-room waterfall glowed at the low end; the mic's DC offset is now removed per block, and after a second run still showed a -58 dBFS band below 250 Hz (room hum), each column now subtracts its own slowly tracked background (falls ~6 dB/s, rises ~1.5 dB/s). Verified on hardware: a quiet room is dark and speech harmonics stand out (`lens.png`, `lens-sound.png`). Free heap 24 KB after start.
+- **Ghost Sense gets no data on the home network.** The router beacons in 802.11b, which carries no CSI, and other CSI-bearing frames arrived at about 1/s across all transmitters, so the format lock (30 frames) and the fallback (10 frames in 3 s) never trigger. Ron chose to let Ghost Sense join the network: with credentials saved via `deck.py wifi` it pings the router every 20 ms. Verified on hardware: it joins, the router answers in 802.11ax HE-SU (hence `acquire_csi_su`), and walking within 2 m flips the chip to MOTION with tall ridgeline peaks (`ghost-motion.png`). Free heap 107 KB. CSI is split into 50 equal bands averaging only non-zero subcarriers, so HE's wider buffer is read across the whole channel; verified, ridgelines now show a stable shape at rest (`ghost.png`, `ghost-2.png`, `ghost-3.png`).
+- **Ghost Sense's stream has ~1 s gaps.** Joined and pinging every 20 ms, CSI arrives at 25–45/s most seconds but drops to 0–6 in roughly one second out of five; the raw CSI callback count drops too, so it's the radio stream, not the counting. A shorter ping timeout (100 ms) didn't help. Suspects: router power-save or airtime scheduling, or esp_ping's send loop. The gaps may cause occasional false MOTION. Next step: send pings from our own timer with a raw socket (no wait-for-reply), and log RSSI/MCS around the gaps.
 
 - **The bridge isn't a service.** It runs only while a terminal or session keeps it alive. When it stops, the board keeps showing its last data with no "stale" indicator. One possible fix is a launchd agent plus a staleness badge on the device.
 - **False compaction counts.** The Context screen counts any drop of more than 40% between turns as a compaction, so a one-turn spike followed by a normal turn is misread (visible in `2-context.png`). A fix is to require the drop to persist, or to read the transcript's compaction marker.

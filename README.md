@@ -10,11 +10,21 @@ Demos for the Waveshare ESP32-C6-Touch-AMOLED-2.16, a 480×480 AMOLED touch boar
 
 ![devdeck](docs/screenshots/overview.png)
 
+The same firmware also carries a **launcher** and four more apps. Pick one on the home screen and the board reboots straight into it. Press **BOOT** to come back home.
+- **Living Painting:** a reaction-diffusion painting that grows slowly; taps and your commits seed new blooms.
+- **Sound Lens:** a live spectrogram waterfall from the on-board mics, with a chromatic tuner.
+- **Signal Field:** every Wi-Fi, Bluetooth and Zigbee/Thread transmitter nearby, drawn as glowing orbs.
+- **Ghost Sense:** motion sensing from Wi-Fi channel state, drawn as ridgelines. On a quiet network it needs to join and ping your router: stop the bridge and run `tools/deck.py wifi` once to save the credentials on the board.
+
+You can also switch from the laptop with `tools/deck.py app lens` (ids: `home devdeck painting lens field ghost`).
+
 To build and flash, load ESP-IDF 6.1 (`get_idf`), then:
 
 ```bash
 cd firmware/devdeck && idf.py build && idf.py -p /dev/cu.usbmodem101 flash
 ```
+
+If you built before the launcher landed, delete `firmware/devdeck/sdkconfig` once first, so the new radio settings in `sdkconfig.defaults` take effect.
 
 To feed it live data, set up the tools once:
 

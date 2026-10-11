@@ -1,4 +1,4 @@
-// Tileview shell: swipeable screens, page dots, shared widgets, message dispatch.
+// DevDeck app: the tileview shell (swipeable screens, page dots, autoplay) plus shared widget helpers.
 #include <string.h>
 #include "screens.h"
 
@@ -79,9 +79,8 @@ static lv_obj_t *mk_tile(lv_obj_t *tv, int i)
     return t;
 }
 
-void ui_create(void)
+void devdeck_start(lv_obj_t *scr)
 {
-    lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
     tv = lv_tileview_create(scr);
     lv_obj_set_style_bg_color(tv, lv_color_black(), 0);
@@ -106,7 +105,7 @@ void ui_create(void)
     }
 }
 
-void ui_on_message(const char *topic, const cJSON *msg)
+void devdeck_on(const char *topic, const cJSON *msg)
 {
     if (!strcmp(topic, "tile")) lv_tileview_set_tile_by_index(tv, json_int(msg, "i", 0), 0, LV_ANIM_OFF);
     orbit_on(topic, msg);

@@ -56,7 +56,7 @@ static void bsp_lvgl_rounder_cb(lv_disp_drv_t *disp_drv, lv_area_t *area)
 }
 #endif
 
-void Lvgl_PortInit(DisplayPort &display) {
+void Lvgl_PortInit(DisplayPort &display, int buf_lines) {
 	esp_lv_adapter_config_t cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG();
 	cfg.task_stack_size = 20 * 1024;     // 栈大小改为16KB，彻底解决栈溢出
     cfg.task_priority = 10;              // 优先级提升到10，解决UI卡顿
@@ -73,7 +73,7 @@ void Lvgl_PortInit(DisplayPort &display) {
         BSP_LCD_V_RES,             		// 垂直分辨率
         ESP_LV_ADAPTER_ROTATE_0 		// 旋转角度
     );
-	disp_cfg.profile.buffer_height = 100; // 设置更合适的缓冲区高度以提高性能
+	disp_cfg.profile.buffer_height = buf_lines;   // strip height: two strips of 480 x buf_lines RGB565
 	
 	disp = esp_lv_adapter_register_display(&disp_cfg);
     assert(disp != NULL);
