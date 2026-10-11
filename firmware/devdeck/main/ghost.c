@@ -4,9 +4,10 @@
 // moving in the room change the multipath, so the subcarrier amplitude profile wobbles. The screen draws
 // the recent profiles as ridgelines; a motion score is the short-term wobble against a learned quiet floor.
 // When the room has been still for 30 s it also tries a breathing estimate (marked experimental).
-// Listen-only: no association, nothing transmitted beyond the initial scan, addresses kept in RAM only.
-// If the router's beacons carry no CSI (11b rate) and its traffic is quiet, it falls back to the busiest
-// transmitter on that channel, shown as "a nearby device".
+// With Wi-Fi credentials stored by `deck.py wifi`, it joins that network and pings the router 50 times a
+// second; the replies give a steady CSI stream. This is the only app that connects or transmits.
+// Without credentials it only listens: the strongest router, or if its frames carry no CSI (11b beacons),
+// the busiest transmitter on that channel, shown as "a nearby device". Names and addresses stay in RAM.
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -58,6 +59,7 @@ typedef struct {
     uint32_t pkts_window, pkt_rate;
     char src[64];
     uint8_t ch;
+    bool quiet;                   // listen-only and no transmitter sends enough CSI
     // task-only
     float win[WIN][NSC];
     int win_n, win_i;
@@ -73,6 +75,7 @@ typedef struct {
 static ghost_t *G;
 static QueueHandle_t csi_q;
 static volatile bool want_any;
+static bool have_creds;
 static uint8_t want_mac[6];
 static volatile int lock_fmt = -1;
 static volatile uint32_t csi_total;
@@ -244,16 +247,26 @@ static void ghost_task(void *arg)
 {
     uint8_t bssid[6], ch = 0;
     char ssid[33];
-    int8_t rssi;
-    while (!radio_wifi_strongest_ap(bssid, ssid, &ch, &rssi)) {
+    int8_t rssi = 0;
+    bool joined = false;
+    if (have_creds) {
+        set_src("joining your Wi-Fi...");
+        joined = radio_wifi_join(bssid, ssid, &ch, 20000);
+        if (!joined) {
+            set_src("couldn't join the saved network; listening only");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+        }
+    }
+    while (!joined && !radio_wifi_strongest_ap(bssid, ssid, &ch, &rssi)) {
         set_src("no Wi-Fi network in range, retrying");
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
     G->ch = ch;
     char b[64];
-    snprintf(b, sizeof b, "%s", ssid[0] ? ssid : "hidden network");
+    snprintf(b, sizeof b, "%s%s", ssid[0] ? ssid : "hidden network", joined ? " (joined)" : "");
     set_src(b);
-    ESP_LOGI(TAG, "locked to the strongest router on channel %d (%d dBm)", ch, rssi);   // no names in logs
+    if (joined) ESP_LOGI(TAG, "joined the saved network on channel %d", ch);            // no names in logs
+    else ESP_LOGI(TAG, "locked to the strongest router on channel %d (%d dBm)", ch, rssi);
 
     wifi_csi_config_t cfg = {0};
     cfg.enable = 1;
@@ -261,11 +274,14 @@ static void ghost_task(void *arg)
     cfg.acquire_csi_ht20 = 1;
     memcpy(want_mac, bssid, 6);
     want_any = false;
-    radio_wifi_sniff(sniff_nop, WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA);
-    radio_wifi_channel(ch);
+    if (!joined) {
+        radio_wifi_sniff(sniff_nop, WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA);
+        radio_wifi_channel(ch);
+    }
     esp_wifi_set_csi_config(&cfg);
     esp_wifi_set_csi_rx_cb(csi_cb, NULL);
     esp_wifi_set_csi(true);
+    if (joined && !radio_ping_gateway(20)) ESP_LOGW(TAG, "could not start pinging the router");
     xSemaphoreTake(G->mx, portMAX_DELAY);
     G->state = S_WAIT;
     xSemaphoreGive(G->mx);
@@ -275,7 +291,7 @@ static void ghost_task(void *arg)
     uint32_t t0 = now_ms(), got = 0, last_any = now_ms(), last_rate = now_ms();
     int fmt_count[16] = {0};
     struct { uint8_t mac[6]; uint32_t n; } cand[8] = {0};
-    bool fallback_tried = false;
+    bool fallback_tried = joined;                          // joined: the router's replies are the source
     csi_s s;
     for (;;) {
         uint32_t ms = now_ms();
@@ -314,6 +330,8 @@ static void ghost_task(void *arg)
                 memcpy(want_mac, cand[best].mac, 6);
                 snprintf(b, sizeof b, "a nearby device (%s is quiet)", ssid[0] ? ssid : "router");
                 set_src(b);
+            } else {
+                G->quiet = true;                           // nothing to measure without joining
             }
             memset(cand, 0, sizeof cand);                  // forget the addresses once chosen
             want_any = false;
@@ -434,8 +452,13 @@ static void ui_tick(lv_timer_t *t)
         lv_obj_set_style_bg_opa(chip, st == S_MOTION ? LV_OPA_30 : LV_OPA_TRANSP, 0);
         lv_obj_set_style_bg_color(chip, lv_color_hex(col), 0);
         lv_obj_set_hidden(hint_lbl, st >= S_STILL);
-        if (st == S_WAIT) lv_label_set_text(hint_lbl, "waiting for frames...");
         if (st == S_CALIB) lv_label_set_text(hint_lbl, "learning the room, keep still for a moment");
+    }
+    static int shown_quiet = -1;
+    if (st == S_WAIT && G->quiet != shown_quiet) {
+        shown_quiet = G->quiet;
+        lv_label_set_text(hint_lbl, G->quiet ? "Too little Wi-Fi traffic to measure.\nRun deck.py wifi so Ghost Sense can join and ping your router."
+                                             : "waiting for frames...");
     }
     char b[96];
     if (bpm > 0) snprintf(b, sizeof b, "breathing  ~%d /min   experimental", (int)lroundf(bpm));
@@ -491,7 +514,8 @@ void ghost_start(lv_obj_t *scr)
     src_lbl = mk_label(scr, &lv_font_montserrat_12, COL_MUTED, "");
     lv_obj_set_pos(src_lbl, 20, 460);
 
-    if (!radio_wifi_start()) {
+    have_creds = radio_creds_present();
+    if (!radio_wifi_start(have_creds)) {
         lv_label_set_text(hint_lbl, "Wi-Fi radio failed to start");
         return;
     }

@@ -470,7 +470,7 @@ void field_start(lv_obj_t *scr)
     lv_obj_set_hidden(card, true);
 
     // Radios: each one is optional; whatever starts gets drawn.
-    have_wifi = radio_wifi_start();
+    have_wifi = radio_wifi_start(false);
     if (have_wifi) radio_wifi_sniff(wifi_rx, WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA);
     if (nimble_port_init() == ESP_OK) {
         ble_hs_cfg.sync_cb = ble_on_sync;

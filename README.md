@@ -14,7 +14,7 @@ The same firmware also carries a **launcher** and four more apps. Pick one on th
 - **Living Painting:** a reaction-diffusion painting that grows slowly; taps and your commits seed new blooms.
 - **Sound Lens:** a live spectrogram waterfall from the on-board mics, with a chromatic tuner.
 - **Signal Field:** every Wi-Fi, Bluetooth and Zigbee/Thread transmitter nearby, drawn as glowing orbs.
-- **Ghost Sense:** motion sensing from Wi-Fi channel state, drawn as ridgelines.
+- **Ghost Sense:** motion sensing from Wi-Fi channel state, drawn as ridgelines. On a quiet network it needs to join and ping your router: stop the bridge and run `tools/deck.py wifi` once to save the credentials on the board.
 
 You can also switch from the laptop with `tools/deck.py app lens` (ids: `home devdeck painting lens field ghost`).
 

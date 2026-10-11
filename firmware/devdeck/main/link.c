@@ -3,6 +3,7 @@
 //   device -> host : "@@ACK <topic>" per message; "@@SNAP x1 y1 x2 y2 n\n"+raw RGB565 per flushed strip;
 //                    "@@APP <id>" once per boot, naming the running app
 // Every app gets every message; {"t":"app","id":"lens"} switches apps (the board reboots into it).
+// {"t":"wifi","s":ssid,"p":password} stores Ghost Sense's credentials in NVS ("s":"" forgets them).
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,7 @@
 #include <driver/usb_serial_jtag_vfs.h>
 #include <esp_log.h>
 #include "app.h"
+#include "radio.h"
 
 static const char *TAG = "link";
 #define LINE_CAP (16 * 1024)
@@ -89,6 +91,13 @@ static void handle_line(char *line)
         if (cJSON_IsString(id)) apps_switch(id->valuestring);   // returns only for an unknown id
         cJSON_Delete(msg);
         return;
+    } else if (strcmp(t->valuestring, "wifi") == 0) {    // credentials for Ghost Sense; never logged
+        bool ok = radio_creds_set(cJSON_GetStringValue(cJSON_GetObjectItem(msg, "s")),
+                                  cJSON_GetStringValue(cJSON_GetObjectItem(msg, "p")));
+        if (!ok) n = snprintf(ack, sizeof ack, "@@NAK wifi\n");
+        char *pw = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "p"));
+        if (pw) memset(pw, 0, strlen(pw));               // don't leave the password in freed heap
+        memset(line, 0, strlen(line));                   // ... or in the line buffer
     } else if (app->on && app_lock()) {
         app->on(t->valuestring, msg);
         app_unlock();

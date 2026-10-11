@@ -5,6 +5,8 @@
   deck.py snap out.png           stream the framebuffer back and save it as PNG
   deck.py app lens               switch the board to an app (it reboots into it); works while the bridge runs
                                  ids: home devdeck painting lens field ghost
+  deck.py wifi                   save Wi-Fi credentials on the board for Ghost Sense (prompts; bridge must be stopped)
+  deck.py wifi --forget          erase them
 """
 import calendar, collections, glob, json, os, re, subprocess, sys, time
 from urllib.parse import urlparse
@@ -426,6 +428,29 @@ if __name__ == '__main__':
                 f.write(msg + '\n')
             print(f'queued for the bridge: {app}')
             sys.exit(0)
+    if cmd == 'wifi':
+        if bridge_running():
+            sys.exit('stop the bridge first: it owns the serial port, and the password should not pass through it')
+        forget = '--forget' in sys.argv
+        if forget:
+            msg = {'t': 'wifi', 's': '', 'p': ''}
+        else:
+            import getpass
+            msg = {'t': 'wifi', 's': input('Wi-Fi name (SSID): ').strip(), 'p': getpass.getpass('Password: ')}
+            if not msg['s']:
+                sys.exit('no SSID given')
+        with open_port() as p:
+            p.reset_input_buffer()
+            p.write((json.dumps(msg, separators=(',', ':')) + '\n').encode())
+            msg = None
+            end, buf = time.time() + 5, b''
+            while time.time() < end and b'@@ACK wifi' not in buf and b'@@NAK wifi' not in buf:
+                buf += p.read(256)
+        if b'@@ACK wifi' in buf:
+            print('forgotten' if forget else 'saved on the board; Ghost Sense joins on its next start (deck.py app ghost)')
+        else:
+            sys.exit('the board rejected it (SSID over 32 or password over 64 characters?)' if b'@@NAK' in buf else 'no answer from the board')
+        sys.exit(0)
     with open_port() as p:
         if cmd == 'app':
             print('switching' if send(p, json.loads(msg)) else 'NO ACK')
