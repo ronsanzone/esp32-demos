@@ -142,8 +142,12 @@ static void audio_task(void *arg)
         if (!audio_mic_read(stereo, NFFT)) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
         int64_t sq = 0;
         memmove(ring, ring + NFFT, NFFT * 2);
+        int32_t dc = 0;                                     // the mic's DC offset leaks into the lowest bins
+        for (int i = 0; i < NFFT; i++) dc += stereo[2 * i];
+        dc /= NFFT;
         for (int i = 0; i < NFFT; i++) {
-            int16_t s = stereo[2 * i];
+            int32_t v = stereo[2 * i] - dc;
+            int16_t s = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
             ring[NFFT + i] = s;
             sq += (int32_t)s * s;
             re[i] = ((int32_t)s * hann[i]) >> 15;
@@ -162,7 +166,7 @@ static void audio_task(void *arg)
         }
         // Auto-range: show the top ~54 dB under a slowly tracked peak, but keep a floor so silence stays dark.
         peak_ema = peak_ema ? (peak_ema * 31 + row_peak) / 32 : row_peak;
-        int top = peak_ema > 16 * 256 ? peak_ema : 16 * 256;
+        int top = peak_ema > 17 * 256 ? peak_ema : 17 * 256;   // raised 6 dB after the first hardware run showed a glowing quiet room
         int bottom = top - 9 * 256;
         uint32_t w = row_w;
         if (w - row_r < ROWQ) {

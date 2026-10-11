@@ -253,7 +253,7 @@ static void ghost_task(void *arg)
     char b[64];
     snprintf(b, sizeof b, "%s", ssid[0] ? ssid : "hidden network");
     set_src(b);
-    ESP_LOGI(TAG, "locked to %s on channel %d (%d dBm)", b, ch, rssi);
+    ESP_LOGI(TAG, "locked to the strongest router on channel %d (%d dBm)", ch, rssi);   // no names in logs
 
     wifi_csi_config_t cfg = {0};
     cfg.enable = 1;

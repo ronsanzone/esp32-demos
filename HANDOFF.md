@@ -18,7 +18,7 @@ _Written 2026-10-11 at the end of the first working session. Records the state a
 - **No Wi-Fi.** It was built, verified, then removed because it cost 167 KB of the 228 KB free heap (see [Decisions](#decisions)).
 - **Not yet verified by a human:** panel colors and orientation on the glass, and touch (swipe, tap-to-cycle). Everything else was verified from on-device framebuffer snapshots (see [Verification](#verification-status)).
 
-## Launcher and apps (added 2026-10-11, not yet verified on hardware)
+## Launcher and apps (added 2026-10-11)
 
 One firmware holds six apps. The board runs **one app per boot**: picking another writes its id to NVS and reboots, so every app starts on a clean heap. That matters because the radio stacks and LVGL can't share 512 KB with each other and with devdeck's screens.
 
@@ -39,7 +39,7 @@ One firmware holds six apps. The board runs **one app per boot**: picking anothe
 | `field` | Signal Field | 40 | Wi-Fi promiscuous (ch 1–13 hop), NimBLE passive scan, 802.15.4 promiscuous (ch 11–26 hop) | Orbs: distance = RSSI, angle = address hash, size = chattiness, color = protocol. Tap an orb for details. Each radio is optional; whatever starts is drawn |
 | `ghost` | Ghost Sense | 40 | Wi-Fi CSI from the strongest router | Ridgelines of the subcarrier amplitude profile. Motion = short-window wobble vs. a learned quiet floor. Breathing estimate (autocorrelation, 6–30/min) only after 30 s of stillness, marked experimental. Falls back to the busiest transmitter on that channel if the router's frames carry no CSI |
 
-**Privacy:** Signal Field and Ghost Sense only listen. Addresses stay in RAM and are never logged or sent to the laptop. Ghost Sense forgets fallback candidates as soon as it has picked one.
+**Privacy:** Signal Field and Ghost Sense only listen. Addresses and network names stay in RAM and are never logged or sent to the laptop. Ghost Sense forgets fallback candidates as soon as it has picked one.
 
 **Radio memory:** `sdkconfig.defaults` turns on BT (NimBLE, observer role only), CSI and coexistence, and shrinks the Wi-Fi buffers (6 static RX, 16 dynamic RX, 8 dynamic TX, AMPDU off, IRAM optimizations off). Static DIRAM is about 261 KB used, 191 KB left before the heap. The radio apps use 40-line strips (about 77 KB instead of 192 KB) to leave room for the stacks. **Heap with all three radios running is unmeasured**; the start-up log line `radios: wifi 1 ble 1 15.4 1, free heap N` is the number to check.
 
@@ -253,7 +253,9 @@ If Wi-Fi comes back, shrink its buffers first (`CONFIG_ESP_WIFI_*_BUFFER_NUM`, s
 
 ## Known issues / limitations
 
-- **The launcher apps have only been compiled, not run.** Open risks, roughly in order: the heap with Wi-Fi + BLE + 802.15.4 all up in Signal Field; three-radio coexistence on the C6's single radio; the ES7210 TDM setup (copied from Waveshare's audio example); Sound Lens auto-range thresholds; the render cost of the upscaled painting image; whether the nearest router's frames carry CSI at all (11b beacons don't).
+- **First hardware run (2026-10-11), screenshots in `docs/screenshots/launcher/`.** All six apps boot without panics and switching works. Free heap after start: home/devdeck 117 KB, painting 39 KB, lens 27 KB (tight), field 100 KB with all three radios up (63 frames/s, 33 devices), ghost 116 KB.
+- **Sound Lens** first failed with "out of memory": its 67 KB waterfall didn't fit LVGL's 64 KB pool, so the pixels now come from the system heap. The quiet-room waterfall glowed at the low end; the mic's DC offset is now removed per block and the display floor raised 6 dB (not yet re-checked on hardware).
+- **Ghost Sense gets no data on the home network.** The router beacons in 802.11b, which carries no CSI, and other CSI-bearing frames arrived at about 1/s across all transmitters, so the format lock (30 frames) and the fallback (10 frames in 3 s) never trigger. The usual fix is to join the network and ping the router for steady replies; that needs Ron's go-ahead because it means storing Wi-Fi credentials on the board.
 
 - **The bridge isn't a service.** It runs only while a terminal or session keeps it alive. When it stops, the board keeps showing its last data with no "stale" indicator. One possible fix is a launchd agent plus a staleness badge on the device.
 - **False compaction counts.** The Context screen counts any drop of more than 40% between turns as a compaction, so a one-turn spike followed by a normal turn is misread (visible in `2-context.png`). A fix is to require the drop to persist, or to read the transcript's compaction marker.
