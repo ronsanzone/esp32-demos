@@ -272,6 +272,7 @@ static void ghost_task(void *arg)
     cfg.enable = 1;
     cfg.acquire_csi_legacy = 1;
     cfg.acquire_csi_ht20 = 1;
+    cfg.acquire_csi_su = 1;                                // 11ax routers answer pings in HE SU
     memcpy(want_mac, bssid, 6);
     want_any = false;
     if (!joined) {
