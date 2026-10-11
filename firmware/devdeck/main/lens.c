@@ -32,7 +32,7 @@ static volatile uint32_t row_w, row_r;
 static volatile float pitch_hz, level_db = -90;
 
 static lv_obj_t *img, *note_lbl, *hz_lbl, *cents_lbl, *needle, *level_bar, *db_lbl, *status_lbl;
-static lv_draw_buf_t *wf;
+static lv_draw_buf_t wf_buf, *wf = &wf_buf;   // pixels on the system heap: 67 KB won't fit LVGL's 64 KB pool
 
 // ---- DSP ----
 static void dsp_init(void)
@@ -292,12 +292,12 @@ void lens_start(lv_obj_t *scr)
     db_lbl = mk_label(scr, &lv_font_montserrat_12, COL_MUTED, "");
     lv_obj_set_pos(db_lbl, 24, 138);
 
-    wf = lv_draw_buf_create(WF_W, WF_H, LV_COLOR_FORMAT_RGB565, 0);
-    if (!wf) {
+    void *px = heap_caps_calloc(WF_W * WF_H, 2, MALLOC_CAP_INTERNAL);
+    if (!px) {
         lv_label_set_text(status_lbl, "out of memory");
         return;
     }
-    memset(wf->data, 0, WF_W * WF_H * 2);
+    lv_draw_buf_init(wf, WF_W, WF_H, LV_COLOR_FORMAT_RGB565, 0, px, WF_W * WF_H * 2);
     img = lv_image_create(scr);
     lv_image_set_src(img, wf);
     lv_obj_set_size(img, WF_W * 2, WF_H * 2);
