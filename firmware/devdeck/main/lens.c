@@ -164,7 +164,7 @@ static void audio_task(void *arg)
             mag[k] = log2q8(m + 1);
         }
         // Each column shows energy above its own steady background (fans, hum, mic noise), so a quiet room
-        // stays dark and new sounds pop. The background falls instantly and creeps up ~1.5 dB/s, so a held
+        // stays dark and new sounds pop. The background falls ~6 dB/s and creeps up ~1.5 dB/s, so a held
         // note fades after ~20 s; the tuner is unaffected.
         uint32_t w = row_w;
         if (w - row_r < ROWQ) {
@@ -173,7 +173,7 @@ static void audio_task(void *arg)
                 int m = 0;
                 for (int k = col_lo[c]; k < col_hi[c]; k++) if (mag[k] > m) m = mag[k];
                 int f = col_floor[c];
-                f = !f || m < f ? m : f + 2;
+                f = !f ? m : m < f ? f - 8 : f + 2;          // settles near the 20th percentile of the noise
                 col_floor[c] = f;
                 int idx = (m - f - 256) * 255 / (6 * 256);   // 6 dB of flutter hidden, then 36 dB of range
                 row[c] = cmap[idx < 0 ? 0 : idx > 255 ? 255 : idx];
