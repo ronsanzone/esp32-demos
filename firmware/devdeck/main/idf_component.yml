@@ -1,0 +1,7 @@
+dependencies:
+  idf: '>=5.5'
+  espressif/esp_lcd_sh8601: ^1.0.0
+  lvgl/lvgl: ^9.5.0
+  waveshare/esp_lcd_touch_cst9217: ^1.0.4
+  espressif/esp_lvgl_adapter: ^0.3.0
+  espressif/cjson: '*'
