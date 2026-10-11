@@ -24,7 +24,7 @@
 static const char *TAG = "ghost";
 
 #define ACCENT 0xA98BF5
-#define NSC 50                    // subcarriers used: LLTF indices 2..26 and 38..62 (edges and DC dropped)
+#define NSC 50                    // frequency bands across the channel, each the average of its subcarriers
 #define NPT 25                    // points per ridgeline (subcarrier pairs)
 #define NRIDGE 24
 #define WIN 12                    // packets in the short motion window
@@ -56,7 +56,7 @@ typedef struct {
     float spark[SPARK];           // motion ratio history
     int state;
     float ratio, bpm;
-    uint32_t pkts_window, pkt_rate;
+    uint32_t pkt_rate;
     char src[64];
     uint8_t ch;
     bool quiet;                   // listen-only and no transmitter sends enough CSI
@@ -78,7 +78,7 @@ static volatile bool want_any;
 static bool have_creds;
 static uint8_t want_mac[6];
 static volatile int lock_fmt = -1;
-static volatile uint32_t csi_total;
+static volatile uint32_t csi_total, csi_queued;
 
 static lv_obj_t *canvas, *chip, *chip_lbl, *breath_lbl, *src_lbl, *hint_lbl;
 
@@ -99,14 +99,24 @@ static void csi_cb(void *ctx, wifi_csi_info_t *info)
     memcpy(s.mac, info->mac, 6);
     s.fmt = info->rx_ctrl.cur_bb_format;
     s.rssi = info->rx_ctrl.rssi;
-    const int8_t *b = info->buf;                            // 64 subcarriers as (imag, real) pairs
-    int k = 0;
-    for (int sc = 2; sc <= 62; sc++) {
-        if (sc > 26 && sc < 38) continue;
-        int im = b[2 * sc], re = b[2 * sc + 1];
-        s.amp[k++] = (uint16_t)(sqrtf((float)(im * im + re * re)) * 8);
+    // The buffer is (imag, real) pairs: 64 subcarriers for legacy/HT, more for HE (11ax). Rather than hard-code
+    // each layout, split it into NSC equal bands and average the power of the non-zero subcarriers in each;
+    // guard, DC and null tones read as zero. Empty bands copy their neighbour.
+    const int8_t *b = info->buf;
+    int n = info->len / 2, first = info->first_word_invalid ? 2 : 0;
+    if (n > 256) n = 256;
+    uint16_t prev = 0;
+    for (int k = 0; k < NSC; k++) {
+        int lo = first + k * (n - first) / NSC, hi = first + (k + 1) * (n - first) / NSC;
+        uint32_t pw = 0, cnt = 0;
+        for (int sc = lo; sc < hi; sc++) {
+            int im = b[2 * sc], re = b[2 * sc + 1];
+            if (im | re) { pw += im * im + re * re; cnt++; }
+        }
+        s.amp[k] = cnt ? (uint16_t)(sqrtf((float)pw / cnt) * 8) : prev;
+        prev = s.amp[k];
     }
-    xQueueSend(csi_q, &s, 0);
+    if (xQueueSend(csi_q, &s, 0) == pdTRUE) csi_queued++;
 }
 
 static void sniff_nop(void *buf, wifi_promiscuous_pkt_type_t type) {}
@@ -193,7 +203,6 @@ static void ingest(const csi_s *s, uint32_t ms)
 
     xSemaphoreTake(G->mx, portMAX_DELAY);
     G->ratio = ratio;
-    G->pkts_window++;
     if ((int32_t)(ms - calib_until) < 0) G->state = S_CALIB;
     else if (G->state != S_MOTION && ratio > 2.5f) G->state = S_MOTION;
     else if (G->state == S_MOTION && ratio < 1.8f) {
@@ -347,8 +356,10 @@ static void ghost_task(void *arg)
         }
         if (ms - last_rate >= 1000) {
             xSemaphoreTake(G->mx, portMAX_DELAY);
-            G->pkt_rate = G->pkts_window * 1000 / (ms - last_rate);
-            G->pkts_window = 0;
+            static uint32_t last_q;                        // counted where frames arrive, not where they're used
+            uint32_t q = csi_queued;
+            G->pkt_rate = (q - last_q) * 1000 / (ms - last_rate);
+            last_q = q;
             xSemaphoreGive(G->mx);
             last_rate = ms;
         }
