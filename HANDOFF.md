@@ -18,6 +18,39 @@ _Written 2026-10-11 at the end of the first working session. Records the state a
 - **No Wi-Fi.** It was built, verified, then removed because it cost 167 KB of the 228 KB free heap (see [Decisions](#decisions)).
 - **Not yet verified by a human:** panel colors and orientation on the glass, and touch (swipe, tap-to-cycle). Everything else was verified from on-device framebuffer snapshots (see [Verification](#verification-status)).
 
+## Launcher and apps (added 2026-10-11, not yet verified on hardware)
+
+One firmware holds six apps. The board runs **one app per boot**: picking another writes its id to NVS and reboots, so every app starts on a clean heap. That matters because the radio stacks and LVGL can't share 512 KB with each other and with devdeck's screens.
+
+```
+ home (launcher grid) ──tap card──► NVS deck/app = "lens", healthy = 1 ──► esp_restart
+        ▲                                                                       │
+        │  BOOT button (GPIO9), `deck.py app home`, or any reset             ▼
+        └─ (crash, hang + power cycle) before the app has run 5 s        apps_boot() reads deck/app,
+                                                                         sizes LVGL strips, runs app
+```
+
+| id | App | LVGL strip | What it uses | Notes |
+|---|---|---|---|---|
+| `home` | Launcher | 100 lines | touch | 2×3 grid of generative cards, free-heap readout |
+| `devdeck` | The original four screens | 100 | USB bridge | unchanged behavior |
+| `painting` | Living Painting | 100 | flash `storage` partition | Gray-Scott reaction-diffusion, 96×96 Q14 fixed point, upscaled to 480×480. Tap seeds a bloom, long-press cycles palettes (reef, ember, moss, ink). `commit` messages seed big blooms, Edit/Write tool calls small ones. Saves every 5 min into 32 rotating 40 KB slots (CRC-checked), so it keeps growing across reboots |
+| `lens` | Sound Lens | 100 | ES7210 mics over I2S (TDM, 16 kHz) | 512-point fixed-point FFT, log-frequency waterfall 40 Hz–8 kHz with auto-ranging, McLeod-style pitch detection for the tuner, level meter |
+| `field` | Signal Field | 40 | Wi-Fi promiscuous (ch 1–13 hop), NimBLE passive scan, 802.15.4 promiscuous (ch 11–26 hop) | Orbs: distance = RSSI, angle = address hash, size = chattiness, color = protocol. Tap an orb for details. Each radio is optional; whatever starts is drawn |
+| `ghost` | Ghost Sense | 40 | Wi-Fi CSI from the strongest router | Ridgelines of the subcarrier amplitude profile. Motion = short-window wobble vs. a learned quiet floor. Breathing estimate (autocorrelation, 6–30/min) only after 30 s of stillness, marked experimental. Falls back to the busiest transmitter on that channel if the router's frames carry no CSI |
+
+**Privacy:** Signal Field and Ghost Sense only listen. Addresses stay in RAM and are never logged or sent to the laptop. Ghost Sense forgets fallback candidates as soon as it has picked one.
+
+**Radio memory:** `sdkconfig.defaults` turns on BT (NimBLE, observer role only), CSI and coexistence, and shrinks the Wi-Fi buffers (6 static RX, 16 dynamic RX, 8 dynamic TX, AMPDU off, IRAM optimizations off). Static DIRAM is about 261 KB used, 191 KB left before the heap. The radio apps use 40-line strips (about 77 KB instead of 192 KB) to leave room for the stacks. **Heap with all three radios running is unmeasured**; the start-up log line `radios: wifi 1 ble 1 15.4 1, free heap N` is the number to check.
+
+**How to switch apps:**
+- Tap a card on the home screen.
+- Press **BOOT** from any app to go home.
+- `tools/deck.py app <id>` from the laptop. If the bridge is running it queues the switch through the bridge (it owns the port); otherwise it sends directly.
+- Raw: `tools/deck.py send '{"t":"app","id":"field"}'`.
+
+The board prints `@@APP <id>` once per boot, and the bridge logs `board app: <id>` when it sees it.
+
 ## Quickstart
 
 ```bash
@@ -28,7 +61,7 @@ The alias defined in `~/.zshrc` puts Homebrew python3.14 ahead of macOS python 3
 ```bash
 cd firmware/devdeck && idf.py build && idf.py -p /dev/cu.usbmodem101 flash
 ```
-A first build on a clean checkout fetches the managed components (takes a few minutes).
+A first build on a clean checkout fetches the managed components (takes a few minutes). If this checkout was built before the launcher, `rm sdkconfig` (or `idf.py fullclean`) first so the radio settings in `sdkconfig.defaults` apply.
 
 ```bash
 cd tools && /opt/homebrew/bin/python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -90,10 +123,18 @@ firmware/devdeck/
   sdkconfig.defaults      16 MB flash, LVGL 64 KB pool, Montserrat 12–48
   partitions.csv          nvs 24K, phy, factory 6M, spiffs 3M (unused)
   main/
-    main.cpp              boot: PMU → panel → touch → LVGL → UI → USB link; app_lock/app_unlock C shims
-    app.h                 shared C interface (link, ui, LVGL lock)
-    link.c                USB JSON-lines reader, message dispatch, framebuffer snapshot
-    ui.c                  tileview, page dots, autoplay, shared widget helpers, topic dispatch
+    main.cpp              boot: pick app → PMU → panel → touch → LVGL (per-app strip) → app → USB link; BOOT button
+    app.h                 shared C interface (link, LVGL lock, app registry)
+    apps.c                app registry, NVS app id, crash fallback, apps_switch()
+    home.c                launcher grid
+    link.c                USB JSON-lines reader, dispatch to the running app, framebuffer snapshot
+    devdeck.c             (was ui.c) tileview, page dots, autoplay, shared widget helpers, topic dispatch
+    painting.c            Living Painting
+    audio.c/.h            ES7210 mic bring-up (I2S TDM + esp_codec_dev)
+    lens.c                Sound Lens
+    radio.c/.h            listen-only Wi-Fi helpers
+    field.c               Signal Field
+    ghost.c               Ghost Sense
     screens.h             palette + per-screen create/on functions
     scr_orbit.c           Agent Orbit
     scr_context.c         Context
@@ -106,7 +147,7 @@ firmware/devdeck/
     app_bsp/              esp_lvgl_adapter setup + 2-pixel-aligned rounder (CO5300 needs even areas)
     pmicpower/            AXP2101 setup (wraps vendored XPowersLib, MIT)
 tools/
-  deck.py                 bridge / send / snap / shot
+  deck.py                 bridge / send / snap / shot / app
   serlog.py               serial reader that survives USB re-enumeration
 docs/screenshots/         on-device framebuffer captures (2026-10-11)
 ```
@@ -147,10 +188,12 @@ deck.py shot ──SIGUSR1──► bridge ── {"t":"snap"} ──►   FLUSH
 | `pipe` | `c[8]`, `last`, `skill`, `ago`, `total` | Deep Work stage counts |
 | `pulse` | `total`, `streak`, `lv` (levels, week-major), `d14[]`, `prs:[{r,ti,st}]` | Ship Pulse |
 | `tile` | `i` | Jump to screen `i` (debug/screenshot use) |
+| `app` | `id` | Acked, then the board reboots into that app |
+| `commit` | `h` (short hash), `r` (repo) | Living Painting seeds a bloom; the bridge sends it when HEAD moves in a live session's repo (polled every 20 s) |
 | `snap` | | Stream a framebuffer snapshot |
 | `ping` | | Acked only |
 
-**Device → host:** `@@ACK <t>` per message. A snapshot is `@@SNAP x1 y1 x2 y2 nbytes\n` followed by raw RGB565 for each strip, then `@@SNAPEND`. Normal `ESP_LOG` output is interleaved, and the bridge drains and ignores it.
+**Device → host:** `@@APP <id>` once per boot. `@@ACK <t>` per message. A snapshot is `@@SNAP x1 y1 x2 y2 nbytes\n` followed by raw RGB565 for each strip, then `@@SNAPEND`. Normal `ESP_LOG` output is interleaved, and the bridge drains and ignores it.
 
 ### Firmware notes
 
@@ -209,6 +252,8 @@ If Wi-Fi comes back, shrink its buffers first (`CONFIG_ESP_WIFI_*_BUFFER_NUM`, s
 10. LVGL `LONG_MODE_DOTS` only truncates when the label's height is fixed.
 
 ## Known issues / limitations
+
+- **The launcher apps have only been compiled, not run.** Open risks, roughly in order: the heap with Wi-Fi + BLE + 802.15.4 all up in Signal Field; three-radio coexistence on the C6's single radio; the ES7210 TDM setup (copied from Waveshare's audio example); Sound Lens auto-range thresholds; the render cost of the upscaled painting image; whether the nearest router's frames carry CSI at all (11b beacons don't).
 
 - **The bridge isn't a service.** It runs only while a terminal or session keeps it alive. When it stops, the board keeps showing its last data with no "stale" indicator. One possible fix is a launchd agent plus a staleness badge on the device.
 - **False compaction counts.** The Context screen counts any drop of more than 40% between turns as a compaction, so a one-turn spike followed by a normal turn is misread (visible in `2-context.png`). A fix is to require the drop to persist, or to read the transcript's compaction marker.

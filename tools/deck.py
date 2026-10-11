@@ -3,8 +3,10 @@
   deck.py bridge                 stream live dev activity to the board (Ctrl-C to stop; stop before flashing)
   deck.py send '{"t":"ping"}'    send one message, print the board's ack
   deck.py snap out.png           stream the framebuffer back and save it as PNG
+  deck.py app lens               switch the board to an app (it reboots into it); works while the bridge runs
+                                 ids: home devdeck painting lens field ghost
 """
-import calendar, collections, glob, json, os, re, sys, time
+import calendar, collections, glob, json, os, re, subprocess, sys, time
 from urllib.parse import urlparse
 import serial
 from PIL import Image
@@ -288,6 +290,44 @@ def ctx_msg(roster):
 
 
 PIDFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.bridge.pid')
+OUTBOX = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.bridge.outbox')
+APPS = ('home', 'devdeck', 'painting', 'lens', 'field', 'ghost')
+
+
+def bridge_running():
+    try:
+        os.kill(int(open(PIDFILE).read()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+class Commits:
+    """Watches the repos that live sessions work in; new HEAD commits seed the Living Painting."""
+
+    def __init__(self):
+        self.heads, self.last = {}, 0
+
+    def poll(self, roster):
+        if time.time() - self.last < 20:
+            return []
+        self.last = time.time()
+        out = []
+        for cwd in {s.cwd for s in roster if s.cwd and s.cwd != HOME}:
+            try:
+                top = subprocess.run(['git', '-C', cwd, 'rev-parse', '--show-toplevel'],
+                                     capture_output=True, text=True, timeout=5).stdout.strip()
+                if not top:
+                    continue
+                head = subprocess.run(['git', '-C', top, 'rev-parse', 'HEAD'],
+                                      capture_output=True, text=True, timeout=5).stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if head and self.heads.get(top) not in (None, head):
+                out.append({'t': 'commit', 'h': head[:7], 'r': os.path.basename(top)})
+            if head:
+                self.heads[top] = head
+        return out
 SHOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shot.png')
 
 
@@ -301,7 +341,9 @@ def bridge():
     latest, sent = {}, {}
     threading.Thread(target=slow_feeds, args=(latest,), daemon=True).start()
     tr = Transcripts()
-    port, last_roster = None, 0
+    commits = Commits()
+    port, last_roster, board_app = None, 0, '?'
+
     while True:
         try:
             if want_shot and port is not None:
@@ -337,7 +379,20 @@ def bridge():
                 if s.sid in tr.slots:
                     send(port, {'t': 'tool', 's': tr.slots.index(s.sid), 'n': tool, 'd': detail}, wait_ack=False)
                     time.sleep(0.12)
-            port.read(port.in_waiting or 0)             # drain acks/logs so the board never blocks on TX
+            for msg in commits.poll(roster):
+                send(port, msg, wait_ack=False)
+                print('commit', msg['r'], msg['h'], flush=True)
+            if os.path.exists(OUTBOX):                  # `deck.py app ...` while the bridge owns the port
+                with open(OUTBOX) as f:
+                    lines = f.read().splitlines()
+                os.remove(OUTBOX)
+                for line in lines:
+                    send(port, json.loads(line), wait_ack=False)
+            rx = port.read(port.in_waiting or 0)        # drain acks/logs so the board never blocks on TX
+            m = re.search(rb'@@APP (\w+)', rx)
+            if m and m.group(1).decode() != board_app:
+                board_app = m.group(1).decode()
+                print('board app:', board_app, flush=True)
             time.sleep(0.5)
         except (serial.SerialException, OSError) as e:
             print('port lost:', e, flush=True)
@@ -361,8 +416,20 @@ if __name__ == '__main__':
                 break
             time.sleep(0.1)
         sys.exit(0)
+    if cmd == 'app':
+        app = sys.argv[2] if len(sys.argv) > 2 else ''
+        if app not in APPS:
+            sys.exit(f'unknown app {app!r}; pick one of: {" ".join(APPS)}')
+        msg = json.dumps({'t': 'app', 'id': app})
+        if bridge_running():
+            with open(OUTBOX, 'a') as f:
+                f.write(msg + '\n')
+            print(f'queued for the bridge: {app}')
+            sys.exit(0)
     with open_port() as p:
-        if cmd == 'send':
+        if cmd == 'app':
+            print('switching' if send(p, json.loads(msg)) else 'NO ACK')
+        elif cmd == 'send':
             print('ack' if send(p, json.loads(sys.argv[2])) else 'NO ACK')
         elif cmd == 'snap':
             print(f'{snap(p, sys.argv[2])} strips -> {sys.argv[2]}')

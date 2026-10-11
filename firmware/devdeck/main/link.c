@@ -1,6 +1,8 @@
 // USB-Serial/JTAG link to the laptop.
 //   host -> device : one JSON object per line, {"t":"<topic>", ...}
-//   device -> host : "@@ACK <topic>" per message; "@@SNAP x1 y1 x2 y2 n\n"+raw RGB565 per flushed strip
+//   device -> host : "@@ACK <topic>" per message; "@@SNAP x1 y1 x2 y2 n\n"+raw RGB565 per flushed strip;
+//                    "@@APP <id>" once per boot, naming the running app
+// Every app gets every message; {"t":"app","id":"lens"} switches apps (the board reboots into it).
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +42,13 @@ static void on_flush_start(lv_event_t *e)
     out(lv_display_get_buf_active(disp)->data, n);
 }
 
+void link_print(const char *line)
+{
+    out("\n", 1);
+    out(line, strlen(line));
+    out("\n", 1);
+}
+
 void link_install_snapshot(lv_display_t *disp)
 {
     lv_display_add_event_cb(disp, on_flush_start, LV_EVENT_FLUSH_START, NULL);
@@ -68,14 +77,22 @@ static void handle_line(char *line)
         cJSON_Delete(msg);
         return;
     }
-    if (strcmp(t->valuestring, "snap") == 0) {
-        snapshot();
-    } else if (app_lock()) {
-        ui_on_message(t->valuestring, msg);
-        app_unlock();
-    }
     char ack[48];
     int n = snprintf(ack, sizeof ack, "@@ACK %.32s\n", t->valuestring);
+    const app_t *app = apps_current();
+    if (strcmp(t->valuestring, "snap") == 0) {
+        snapshot();
+    } else if (strcmp(t->valuestring, "app") == 0) {
+        const cJSON *id = cJSON_GetObjectItem(msg, "id");
+        out(ack, n);                                 // ack first: the switch reboots the board
+        vTaskDelay(pdMS_TO_TICKS(50));
+        if (cJSON_IsString(id)) apps_switch(id->valuestring);   // returns only for an unknown id
+        cJSON_Delete(msg);
+        return;
+    } else if (app->on && app_lock()) {
+        app->on(t->valuestring, msg);
+        app_unlock();
+    }
     out(ack, n);
     cJSON_Delete(msg);
 }
