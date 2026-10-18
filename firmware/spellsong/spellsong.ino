@@ -31,8 +31,8 @@ static int volIdx = 1;
 static uint32_t frame = 0;
 
 // IMU axis mapping onto the screen (display rotation 1). Flip signs here if the sand falls the wrong way.
-static const int GX_AXIS = 0, GY_AXIS = 1;
-static const float GX_SIGN = -1, GY_SIGN = 1;
+static const int GX_AXIS = 1, GY_AXIS = 0;
+static const float GX_SIGN = -1, GY_SIGN = 1;  // measured: held upright, ax = +1 g
 
 // ---------------------------------------------------------------- audio task
 
