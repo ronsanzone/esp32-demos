@@ -19,7 +19,7 @@ Arduino core 3.3.x for ESP32, with M5Unified and M5GFX installed as libraries:
 arduino-cli compile \
   --fqbn "espressif:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,FlashSize=8M,PSRAM=opi,PartitionScheme=default_8MB" \
   --output-dir build firmware/spellsong
-esptool --chip esp32s3 -p /dev/cu.usbmodem* write-flash 0x0 build/spellsong.ino.merged.bin
+esptool --chip esp32s3 -p /dev/cu.usbmodem* --after watchdog-reset write-flash 0x0 build/spellsong.ino.merged.bin
 ```
 
 The StickS3 module (ESP32-S3-PICO-1-N8R8) has octal PSRAM, so `PSRAM=opi`; the quad setting fails at boot with "wrong PSRAM line mode". To go back to the factory firmware,
