@@ -53,6 +53,16 @@ One firmware holds six apps. The board runs **one app per boot**: picking anothe
 
 The board prints `@@APP <id>` once per boot, and the bridge logs `board app: <id>` when it sees it.
 
+## Spellsong on the M5StickS3 (added 2026-10-18)
+
+A separate Arduino sketch for Ron's second board, in `firmware/spellsong` (it is not part of the C6 launcher). The board is an ESP32-S3-PICO-1-N8R8 with **octal** PSRAM, so build with `PSRAM=opi`; quad fails at boot.
+
+- **Controls:** KEY1 (front) tap switches scene, hold rerolls the realm. KEY2 (side) tap toggles Scry, hold cycles volume (capped on battery, since loud volume on battery reboots it).
+- **Hold it** landscape with the buttons and USB on the right. In that pose the IMU's +X points to the top of the image (`GX_AXIS`/`GY_AXIS` in `spellsong.ino`).
+- **Flashing from a Claude session is blocked** by the Mac's permission check, so Ron runs `tools/flash-stick.sh`, which flashes the committed `firmware/spellsong/dist/` bins. After flashing over the factory firmware it can stay in download mode until a power cycle. UiFlow2 is restorable from M5Burner.
+- **Debug over USB:** `tools/stick.py shot|state|imu`.
+- **Verified on hardware (2026-10-18):** it boots with 8 MB PSRAM, the display is upright, the sand follows tilt, and spells show in both scenes. **Not yet verified:** Scry against real room music, and how the music sounds to a person.
+
 ## Quickstart
 
 ```bash
