@@ -39,3 +39,9 @@ tools/.venv/bin/python tools/deck.py bridge
 ```
 
 See **[HANDOFF.md](HANDOFF.md)** for the hardware, architecture, wire protocol, status, decisions and known issues.
+
+## Spellsong (M5StickS3)
+
+A second board, the M5StickS3, runs **Spellsong**: generative NES-style chiptune in fantasy modes, with pixel-art scenes (a mana-sand hourglass and a wizard's scrying orb). It never plays out of key. Tilt, motion and shakes shape the melody, nearby Wi-Fi seeds the "realm", and a low battery slows the tempo. Scry mode listens to music in the room and adopts its key and tempo. See [firmware/spellsong](firmware/spellsong/README.md).
+
+![Spellsong sand](docs/screenshots/spellsong-sand.png) ![Spellsong orb](docs/screenshots/spellsong-orb.png)
