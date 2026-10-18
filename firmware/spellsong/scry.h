@@ -38,6 +38,7 @@ struct Scryer {
   float agc = 0.01f;
   static const int ENV = 160;
   float env[ENV]; int envPos = 0;
+  bool onsets[ENV];
   int ringFill = 0;
 
   void begin() {
@@ -60,7 +61,7 @@ struct Scryer {
   }
   void reset() {
     memset(ring, 0, sizeof(ring)); memset(prevMag, 0, sizeof(prevMag));
-    memset(chroma, 0, sizeof(chroma)); memset(env, 0, sizeof(env));
+    memset(chroma, 0, sizeof(chroma)); memset(env, 0, sizeof(env)); memset(onsets, 0, sizeof(onsets));
     ringFill = 0; envPos = 0; agc = 0.01f;
     scry.keyRoot = -1; scry.keyConf = 0; scry.bpm = 0; scry.frames = 0;
   }
@@ -132,7 +133,9 @@ struct Scryer {
     float mean = 0; for (int i = 0; i < ENV; i++) mean += env[i]; mean /= ENV;
     static float fluxAvg = 0;
     fluxAvg = fluxAvg * 0.9f + flux * 0.1f;
-    if (flux > fluxAvg * 1.8f && flux > mean * 1.5f && flux > 0.5f) scry.onset = true;
+    bool on = flux > fluxAvg * 1.8f && flux > mean * 1.5f && flux > 0.5f && scry.level > 0.08f;
+    if (on) scry.onset = true;
+    onsets[(envPos + ENV - 1) % ENV] = on;
     scry.frames = scry.frames + 1;
 
     if (scry.frames % 16 == 0) { estimateKey(); estimateTempo(mean); }
@@ -173,6 +176,8 @@ struct Scryer {
       }
       if (s > bestV) { bestV = s; bestL = L; }
     }
+    int count = 0; for (int i = 0; i < ENV; i++) count += onsets[i];
+    if (count < 8) { scry.bpm = 0; return; }  // too few beats heard: no tempo, not a phantom one
     if (bestL == 0 || scry.frames < ENV) return;
     float fps = (float)MIC_SR / HOP;
     float bpm = 60.0f * fps / bestL;

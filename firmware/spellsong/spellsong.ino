@@ -19,7 +19,8 @@
 #include "world.h"
 
 static M5Canvas canvas(&M5.Display);
-static uint16_t lut[C_COUNT];
+static uint16_t lut[C_COUNT], lutFlash[C_COUNT];
+static int spellFlash = 0;
 static int16_t abuf[3][256];
 static int16_t mbuf[3][HOP];
 static volatile bool wantScry = false;   // main loop's request
@@ -175,7 +176,7 @@ static void onMusic() {
             sand[y][x] = 0; grainCount--;
             spawn(x, y, (wf() - 0.5f) * 2.5f, -1.0f - wf() * 2.0f, c, 150, 1);
           }
-        orbPulse = 1; twinkleBoost = 20;
+        orbPulse = 1; twinkleBoost = 20; spellFlash = 7; wizardCast = 30;
         break;
       }
       default: break;
@@ -200,11 +201,13 @@ static void onScry() {
 
 static void present(int shake) {
   uint16_t* buf = (uint16_t*)canvas.getBuffer();
+  const uint16_t* L = (spellFlash > 0 && (spellFlash & 1)) ? lutFlash : lut;
+  if (spellFlash > 0) spellFlash--;
   for (int y = 0; y < H; y++) {
     int sy = constrain(y - shake, 0, H - 1);
     uint16_t* r0 = buf + (y * 2) * 240;
     uint16_t* r1 = r0 + 240;
-    for (int x = 0; x < W; x++) { uint16_t c = lut[fb[sy][x]]; r0[x * 2] = c; r0[x * 2 + 1] = c; r1[x * 2] = c; r1[x * 2 + 1] = c; }
+    for (int x = 0; x < W; x++) { uint16_t c = L[fb[sy][x]]; r0[x * 2] = c; r0[x * 2 + 1] = c; r1[x * 2] = c; r1[x * 2 + 1] = c; }
   }
   canvas.pushSprite(0, 0);
 }
@@ -252,6 +255,8 @@ void setup() {
     uint32_t c = PAL_RGB[i];
     uint16_t v = lgfx::color565((c >> 16) & 255, (c >> 8) & 255, c & 255);
     lut[i] = (v >> 8) | (v << 8);  // sprite buffers hold big-endian RGB565
+    uint16_t f = lgfx::color565((((c >> 16) & 255) + 255) / 2, (((c >> 8) & 255) + 255) / 2, ((c & 255) + 255) / 2);
+    lutFlash[i] = (f >> 8) | (f << 8);
   }
   M5.BtnA.setHoldThresh(700);
   M5.BtnB.setHoldThresh(700);
@@ -309,8 +314,8 @@ void loop() {
     drawParticles();
     drawWisp(frame, scrying, scry.level);
   } else {
-    drawParticles();
     drawOrbScene(frame, scrying);
+    drawParticles();
   }
   drawHUD(scrying, battery, charging);
   present(orbPulse > 0.85f && scene == 0 ? 1 : 0);

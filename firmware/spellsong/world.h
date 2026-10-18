@@ -96,7 +96,7 @@ static void spawn(float x, float y, float vx, float vy, uint8_t c, uint8_t life,
 static void setGravity(float gx, float gy) {
   // gx, gy: in-plane gravity in screen coordinates (g units). Flat on a desk: fall "down".
   float m = sqrtf(gx * gx + gy * gy);
-  if (m < 0.35f) { gdx = 0; gdy = 1; return; }
+  if (m < 0.5f) { gdx = 0; gdy = 1; return; }
   float a = atan2f(gy, gx);
   int oct = (int)lroundf(a / (PI / 4)) & 7;
   static const int8_t DX[8] = {1, 1, 0, -1, -1, -1, 0, 1};
